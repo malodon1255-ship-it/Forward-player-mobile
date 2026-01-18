@@ -1,16 +1,22 @@
-
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import App from './App';
 
-const rootElement = document.getElementById('root');
-if (!rootElement) {
-  throw new Error("Could not find root element to mount to");
+const rootElement = typeof document !== 'undefined' ? document.getElementById('root') : null;
+
+if (rootElement) {
+  const root = ReactDOM.createRoot(rootElement);
+  root.render(
+    <React.StrictMode>
+      <App />
+    </React.StrictMode>
+  );
+} else {
+  // If we are in a native environment where "document" is undefined, 
+  // the environment typically handles the entry point via a different mechanism 
+  // (like AppRegistry.registerComponent). 
+  // For the purpose of this project, we export App as the default.
+  console.log("No DOM root found. Assuming native environment.");
 }
 
-const root = ReactDOM.createRoot(rootElement);
-root.render(
-  <React.StrictMode>
-    <App />
-  </React.StrictMode>
-);
+export default App;

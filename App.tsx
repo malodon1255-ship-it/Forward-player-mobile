@@ -1,405 +1,430 @@
-
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { MediaItem, ViewType, CloudProvider, CloudFile } from './types';
-import { MEDIA_LIBRARY as INITIAL_LIBRARY } from './constants';
-import { gemini } from './services/geminiService';
-import { storageClient } from './services/cloudStorageService';
-import { AppleStylePlayer } from './components/AppleStylePlayer';
+import React, { useState, useCallback, useMemo } from 'react';
 import { 
-  Home, Download, Play, Pause, Info, 
-  ChevronLeft, MoreVertical, SkipBack, SkipForward,
-  Volume2, Settings as SettingsIcon, List, Sparkles, X, Search as SearchIcon,
-  Clock, Tv, Calendar, PlayCircle, FastForward, Rewind, Clapperboard, Users, Layers,
-  Star, Scan, FileVideo, CheckCircle2, AlertCircle, Cloud, Github, LogOut,
-  HardDrive, Monitor, Folder, File, Share2, ExternalLink, RefreshCw, WifiOff,
-  Maximize2, Subtitles, Activity, Check
-} from 'lucide-react';
+  View, 
+  Text, 
+  StyleSheet, 
+  Image, 
+  TouchableOpacity, 
+  ScrollView, 
+  Dimensions, 
+  SafeAreaView, 
+  StatusBar, 
+  Platform,
+  FlatList,
+  ImageBackground
+} from 'react-native';
+import { 
+  Home as HomeIcon, 
+  Download, 
+  Play, 
+  Info, 
+  ChevronLeft, 
+  Search as SearchIcon,
+  PlayCircle,
+  Scan,
+  Cloud,
+  X,
+  Share2,
+  HardDrive,
+  Maximize2
+} from 'lucide-react-native';
 
-// --- Global UI Components (Optimized with React.memo) ---
+import { MediaItem, ViewType, CloudProvider } from './types';
+import { MEDIA_LIBRARY } from './constants';
+import { AppleStylePlayer } from './components/AppleStylePlayer';
+
+const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
+
+// --- Reusable Native Components ---
+
 const Toast = React.memo(({ message, type, onClose }: { message: string; type: 'error' | 'success' | 'info'; onClose: () => void }) => {
-  useEffect(() => {
+  React.useEffect(() => {
     const timer = setTimeout(onClose, 5000);
     return () => clearTimeout(timer);
   }, [onClose]);
 
-  const content = useMemo(() => {
-    const icons = {
-      error: <AlertCircle className="text-red-400" size={20} />,
-      success: <CheckCircle2 className="text-lime-400" size={20} />,
-      info: <Sparkles className="text-sky-400" size={20} />
-    };
-    const bgColors = {
-      error: 'bg-red-500/10 border-red-500/30 backdrop-blur-md',
-      success: 'bg-lime-500/10 border-lime-500/30 backdrop-blur-md',
-      info: 'bg-sky-500/10 border-sky-500/30 backdrop-blur-md'
-    };
-    return { icon: icons[type], style: bgColors[type] };
-  }, [type]);
+  const bgStyle = type === 'error' ? styles.toastError : type === 'success' ? styles.toastSuccess : styles.toastInfo;
 
   return (
-    <div className={`fixed top-12 left-1/2 -translate-x-1/2 z-[2000] px-8 py-4 fluid-geom-md vibrant-glass border ${content.style} flex items-center gap-4 animate-apple-open shadow-2xl`}>
-      {content.icon}
-      <span className="text-xs font-black tracking-widest uppercase">{message}</span>
-      <button onClick={onClose} className="ml-4 opacity-40 hover:opacity-100 transition-opacity"><X size={16} /></button>
-    </div>
+    <View style={[styles.toastContainer, bgStyle]}>
+      <Text style={styles.toastText}>{message.toUpperCase()}</Text>
+      <TouchableOpacity onPress={onClose} style={styles.toastClose}>
+        <X size={14} color="white" opacity={0.5} />
+      </TouchableOpacity>
+    </View>
   );
 });
 
-const GlobalBackgroundVideo = React.memo(({ isAuth }: { isAuth?: boolean }) => (
-  <div className="fixed inset-0 -z-20 overflow-hidden pointer-events-none bg-black">
-    <video 
-      autoPlay muted loop playsInline 
-      className={`w-full h-full object-cover scale-110 blur-[1px] ${isAuth ? 'animate-background-pulse opacity-50' : 'opacity-40 brightness-[0.6]'}`}
-    >
-      <source src="https://assets.mixkit.co/videos/preview/mixkit-stars-in-the-night-sky-loop-9710-large.mp4" type="video/mp4" />
-    </video>
-    <div className="absolute inset-0 bg-gradient-to-b from-black/40 via-transparent to-black pointer-events-none" />
-    <div className="absolute inset-0 bg-gradient-to-t from-black via-black/20 to-transparent pointer-events-none" />
-    {isAuth && (
-      <div className="absolute inset-0 bg-black/30 backdrop-blur-[2px] pointer-events-none">
-        <div className="absolute inset-0 bg-radial-gradient(circle at 50% 50%, rgba(190,242,100,0.05), transparent 70%)" />
-      </div>
+const MediaCard = React.memo(({ item, onClick }: { item: MediaItem; onClick: () => void }) => (
+  <TouchableOpacity onPress={onClick} activeOpacity={0.8} style={styles.cardContainer}>
+    <View style={styles.cardImageContainer}>
+      <Image source={{ uri: item.poster }} style={styles.cardImage} resizeMode="cover" />
+      <View style={styles.cardFormatBadge}>
+        <Text style={styles.cardFormatText}>{item.format.split(' • ')[0]}</Text>
+      </View>
+    </View>
+    {item.progress !== undefined && item.progress > 0 && (
+      <View style={styles.progressBarContainer}>
+        <View style={[styles.progressBarFill, { width: `${item.progress}%` }]} />
+      </View>
     )}
-  </div>
+    <View style={styles.cardInfo}>
+      <Text numberOfLines={1} style={styles.cardTitle}>{item.title}</Text>
+      <Text style={styles.cardSubtitle}>{item.year} • {item.category}</Text>
+    </View>
+  </TouchableOpacity>
 ));
 
-// --- Bottom Navigation Component ---
-// Fix for Error: Cannot find name 'BottomNav'
-const BottomNav = React.memo(({ active, onNavigate }: { active: ViewType; onNavigate: (v: ViewType) => void }) => {
-  const items = [
-    { id: 'home', icon: <Home size={24} />, label: 'Home' },
-    { id: 'search', icon: <SearchIcon size={24} />, label: 'Search' },
-    { id: 'downloads', icon: <Download size={24} />, label: 'Sync' },
-    { id: 'cloud', icon: <Cloud size={24} />, label: 'Cloud' },
-  ];
+const HeroSection = React.memo(({ item, onInfo, onPlay }: { item: MediaItem; onInfo: () => void; onPlay: () => void }) => (
+  <View style={styles.heroContainer}>
+    <Image source={{ uri: item.backdrop }} style={styles.heroImage} resizeMode="cover" />
+    <View style={styles.heroGradientOverlay} />
+    <View style={styles.heroContent}>
+      <View style={styles.heroBadgeRow}>
+        <PlayCircle size={16} color="#bef264" />
+        <Text style={styles.heroBadgeText}>CURATED MASTERPIECE</Text>
+      </View>
+      <Text style={styles.heroTitle}>{item.title}</Text>
+      <Text numberOfLines={2} style={styles.heroDescription}>{item.description}</Text>
+      <View style={styles.heroButtonRow}>
+        <TouchableOpacity onPress={onPlay} activeOpacity={0.7} style={styles.heroPlayButton}>
+          <Play size={20} color="black" fill="black" />
+          <Text style={styles.heroPlayButtonText}>WATCH NOW</Text>
+        </TouchableOpacity>
+        <TouchableOpacity onPress={onInfo} activeOpacity={0.7} style={styles.heroInfoButton}>
+          <Info size={24} color="white" />
+        </TouchableOpacity>
+      </View>
+    </View>
+  </View>
+));
 
-  return (
-    <nav className="fixed bottom-8 left-1/2 -translate-x-1/2 z-[100] px-4 py-3 vibrant-glass border border-white/10 rounded-full flex items-center gap-2 shadow-2xl backdrop-blur-3xl animate-apple-open">
-      {items.map((item) => (
-        <button
-          key={item.id}
-          onClick={() => onNavigate(item.id as ViewType)}
-          className={`flex items-center gap-2 px-6 py-3 rounded-full transition-all duration-500 relative overflow-hidden group ${
-            active === item.id ? 'bg-white text-black' : 'text-white/40 hover:text-white hover:bg-white/5'
-          }`}
-        >
-          {item.icon}
-          {active === item.id && (
-            <span className="text-[10px] font-black uppercase tracking-widest animate-pop">{item.label}</span>
-          )}
-          {active === item.id && (
-            <div className="absolute inset-0 bg-white/20 animate-pulse pointer-events-none" />
-          )}
-        </button>
-      ))}
-    </nav>
-  );
-});
+// --- Main App Entry ---
 
-// --- Main App Logic ---
 export default function App() {
-  const [library, setLibrary] = useState<MediaItem[]>(INITIAL_LIBRARY);
   const [view, setView] = useState<ViewType>('home');
   const [isAuthenticated, setIsAuthenticated] = useState(false);
-  const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [selectedMedia, setSelectedMedia] = useState<MediaItem | null>(null);
   const [isPlayerOpen, setIsPlayerOpen] = useState(false);
   const [toast, setToast] = useState<{message: string, type: 'error' | 'success' | 'info'} | null>(null);
 
-  // Snappy State Handlers
-  const handleAuth = useCallback(() => {
-    setIsAuthenticated(true);
-    setView('home');
-    setToast({ message: 'Core session initialized.', type: 'success' });
-  }, []);
-
   const handleMediaClick = useCallback((item: MediaItem) => {
     setSelectedMedia(item);
     setView('details');
-    window.scrollTo({ top: 0, behavior: 'smooth' });
   }, []);
 
-  const startPlayer = useCallback((item?: MediaItem) => {
-    if (item) setSelectedMedia(item);
-    setIsPlayerOpen(true);
-  }, []);
+  const featuredItem = useMemo(() => MEDIA_LIBRARY[1] || MEDIA_LIBRARY[0], []);
+  const movies = useMemo(() => MEDIA_LIBRARY.filter(m => !m.isTVShow), []);
+  const tvShows = useMemo(() => MEDIA_LIBRARY.filter(m => m.isTVShow), []);
 
-  // Library Filters
-  const movies = useMemo(() => library.filter(m => !m.isTVShow), [library]);
-  const tvShows = useMemo(() => library.filter(m => m.isTVShow), [library]);
-  const featuredItem = library[1] || library[0];
+  if (!isAuthenticated) {
+    return (
+      <View style={styles.authContainer}>
+        <StatusBar barStyle="light-content" />
+        <ImageBackground 
+          source={{ uri: 'https://picsum.photos/seed/bg/1200/800' }} 
+          style={styles.authBg} 
+          blurRadius={5}
+        >
+          <View style={styles.authOverlay}>
+            <View style={styles.authLogoContainer}>
+              <Text style={styles.authLogo}>LUMINA</Text>
+              <Text style={styles.authLogoSub}>NEURAL MEDIA HUB</Text>
+            </View>
+            <View style={styles.authButtonContainer}>
+              <TouchableOpacity onPress={() => setIsAuthenticated(true)} style={[styles.authButton, { backgroundColor: '#4285F4' }]}>
+                <Text style={styles.authButtonText}>CONTINUE WITH GOOGLE</Text>
+              </TouchableOpacity>
+              <TouchableOpacity onPress={() => setIsAuthenticated(true)} style={[styles.authButton, { backgroundColor: '#00A4EF' }]}>
+                <Text style={styles.authButtonText}>MICROSOFT SIGN IN</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </ImageBackground>
+      </View>
+    );
+  }
 
   const renderHome = () => (
-    <div className={`pb-44 transition-all duration-[1200ms] cubic-bezier(0.16, 1, 0.3, 1) ${isSearchOpen ? 'scale-90 blur-[80px] opacity-0 pointer-events-none' : ''}`}>
-      <header className="fixed top-0 left-0 right-0 z-40 p-12 flex justify-between items-center pointer-events-none">
-        <div className="pointer-events-auto"><span className="text-4xl font-black tracking-tighter italic text-white text-vibrant">LUMINA</span></div>
-        <div className="flex items-center gap-4 pointer-events-auto">
-          <button onClick={() => setIsSearchOpen(true)} className="ios-reflective w-16 h-16 flex items-center justify-center fluid-geom-md border-white/20">
-            <SearchIcon size={28} className="text-white" />
-          </button>
-        </div>
-      </header>
-      <HeroSection item={featuredItem} onInfo={() => handleMediaClick(featuredItem)} onPlay={() => startPlayer(featuredItem)} />
-      <div className="relative -mt-28 z-10 space-y-24 px-12">
-        <section>
-          <h3 className="text-3xl font-[900] tracking-tighter flex items-center gap-4 mb-10 text-vibrant">Movies <div className="w-2 h-2 rounded-full bg-white opacity-20" /></h3>
-          <div className="flex gap-8 overflow-x-auto pb-6 -mx-12 px-12 no-scrollbar">
-            {movies.map(item => <MediaCard key={item.id} item={item} onClick={() => handleMediaClick(item)} isHome />)}
-          </div>
-        </section>
-        <section>
-          <h3 className="text-3xl font-[900] tracking-tighter flex items-center gap-4 mb-10 text-vibrant">TV Shows <div className="w-2 h-2 rounded-full bg-white opacity-20" /></h3>
-          <div className="flex gap-8 overflow-x-auto pb-6 -mx-12 px-12 no-scrollbar">
-            {tvShows.map(item => <MediaCard key={item.id} item={item} onClick={() => handleMediaClick(item)} isHome />)}
-          </div>
-        </section>
-      </div>
-    </div>
+    <ScrollView style={styles.scrollView} bounces={false} showsVerticalScrollIndicator={false}>
+      <HeroSection 
+        item={featuredItem} 
+        onInfo={() => handleMediaClick(featuredItem)} 
+        onPlay={() => { setSelectedMedia(featuredItem); setIsPlayerOpen(true); }} 
+      />
+      <View style={styles.sectionsContainer}>
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Movies</Text>
+          <FlatList 
+            horizontal 
+            data={movies} 
+            renderItem={({ item }) => <MediaCard item={item} onClick={() => handleMediaClick(item)} />}
+            keyExtractor={item => item.id}
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.flatListContent}
+          />
+        </View>
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>TV Shows</Text>
+          <FlatList 
+            horizontal 
+            data={tvShows} 
+            renderItem={({ item }) => <MediaCard item={item} onClick={() => handleMediaClick(item)} />}
+            keyExtractor={item => item.id}
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.flatListContent}
+          />
+        </View>
+      </View>
+    </ScrollView>
   );
 
   const renderDetails = () => {
     if (!selectedMedia) return null;
     return (
-      <div className="fixed inset-0 bg-black z-50 overflow-y-auto pb-52 animate-apple-open no-scrollbar">
-        {/* Immersive Backdrop Header */}
-        <div className="relative h-[65vh] w-full">
-          <img src={selectedMedia.backdrop} className="w-full h-full object-cover opacity-60 scale-105" alt="Backdrop" />
-          <div className="absolute inset-0 hbo-gradient" />
-          <button onClick={() => { setView('home'); setSelectedMedia(null); }} className="fixed top-12 left-8 z-[60] ios-reflective p-5 fluid-geom-md liquid-tap border-white/20"><ChevronLeft size={32} /></button>
-        </div>
+      <ScrollView style={styles.detailsContainer} bounces={false}>
+        <Image source={{ uri: selectedMedia.backdrop }} style={styles.detailsBackdrop} resizeMode="cover" />
+        <View style={styles.detailsGradientOverlay} />
         
-        <div className="px-8 md:px-12 -mt-56 relative z-10">
-          <div className="flex flex-col md:flex-row gap-8 md:gap-12 items-start md:items-end mb-12">
-            <div className="w-48 md:w-72 flex-shrink-0 aspect-[2/3] fluid-geom-lg overflow-hidden ios-reflective poster-border shadow-2xl animate-pop">
-              <img src={selectedMedia.poster} className="w-full h-full object-cover" alt="Poster" />
-            </div>
-            
-            <div className="flex-1 space-y-5 md:pb-6 animate-pop" style={{ animationDelay: '100ms' }}>
-              <div className="flex flex-wrap gap-2">
-                 <span className="format-badge ios-reflective px-3 py-1 fluid-geom-sm text-[9px] font-black tracking-widest text-white/80 border-white/10">{selectedMedia.format}</span>
-                 {selectedMedia.category && <span className="format-badge ios-reflective px-3 py-1 fluid-geom-sm text-[9px] font-black tracking-widest text-lime-400 border-white/10 uppercase">{selectedMedia.category}</span>}
-              </div>
-              <h2 className="text-5xl md:text-8xl font-[900] tracking-tighter text-white text-vibrant leading-[0.9]">{selectedMedia.title}</h2>
-              <div className="flex items-center flex-wrap gap-5 text-[11px] text-white/50 font-black uppercase tracking-[0.25em] text-vibrant">
-                <span>{selectedMedia.year}</span>
-                <div className="w-1 h-1 rounded-full bg-white/20" />
-                <span>{selectedMedia.rating}</span>
-                <div className="w-1 h-1 rounded-full bg-white/20" />
-                <span>{selectedMedia.duration}</span>
-              </div>
-            </div>
-          </div>
+        <TouchableOpacity 
+          style={styles.detailsBackBtn} 
+          onPress={() => setView('home')}
+        >
+          <ChevronLeft size={32} color="white" />
+        </TouchableOpacity>
 
-          <div className="space-y-14 animate-pop" style={{ animationDelay: '200ms' }}>
-            <div className="space-y-8">
-              <div className="flex gap-4 items-center">
-                <button onClick={() => startPlayer()} className="ios-reflective text-white h-20 flex-1 fluid-geom-md flex items-center justify-center transition-all border-white/20 gap-4 text-xs font-black uppercase tracking-[0.25em] liquid-tap hover:bg-white hover:text-black">
-                  <Play size={24} fill="currentColor" /> WATCH NOW
-                </button>
-                <button className="ios-reflective h-20 w-20 fluid-geom-md flex items-center justify-center transition-all border-white/20 liquid-tap"><Download size={24} /></button>
-                <button className="ios-reflective h-20 w-20 fluid-geom-md flex items-center justify-center transition-all border-white/20 liquid-tap"><Share2 size={24} /></button>
-              </div>
-              
-              {/* Infuse Style Progress Component */}
-              {selectedMedia.progress !== undefined && (
-                <div className="space-y-3 px-1">
-                  <div className="flex justify-between text-[10px] font-black uppercase tracking-[0.3em] text-white/30">
-                    <span>Core Sync Progress</span>
-                    <span>{selectedMedia.progress}%</span>
-                  </div>
-                  <div className="h-2.5 w-full bg-white/5 rounded-full overflow-hidden relative shadow-inner">
-                    <div className="h-full shadow-[0_0_25px_rgba(163,230,53,0.7)] transition-all duration-1000 cubic-bezier(0.16, 1, 0.3, 1)" style={{ width: `${selectedMedia.progress}%`, background: 'linear-gradient(90deg, #365314 0%, #bef264 100%)' }}>
-                       <div className="absolute right-0 top-0 bottom-0 w-4 bg-white/20 blur-sm" />
-                       <div className="absolute right-0 top-1/2 -translate-y-1/2 w-2 h-2 bg-white rounded-full shadow-[0_0_12px_white]" />
-                    </div>
-                  </div>
-                </div>
-              )}
-            </div>
+        <View style={styles.detailsContentContainer}>
+          <View style={styles.detailsHeaderRow}>
+            <View style={styles.detailsPosterContainer}>
+              <Image source={{ uri: selectedMedia.poster }} style={styles.detailsPoster} />
+            </View>
+            <View style={styles.detailsMainInfo}>
+              <View style={styles.detailsFormatRow}>
+                <Text style={styles.detailsFormatBadge}>{selectedMedia.format.split(' • ')[0]}</Text>
+                <Text style={styles.detailsCategoryBadge}>{selectedMedia.category.toUpperCase()}</Text>
+              </View>
+              <Text style={styles.detailsTitle}>{selectedMedia.title}</Text>
+              <Text style={styles.detailsMetaText}>
+                {selectedMedia.year}  •  {selectedMedia.rating}  •  {selectedMedia.duration}
+              </Text>
+            </View>
+          </View>
 
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-16">
-              <div className="lg:col-span-2 space-y-12">
-                <section className="space-y-6">
-                  <h4 className="text-[10px] font-black uppercase tracking-[0.5em] text-white/20 border-b border-white/5 pb-3">Metadata Overview</h4>
-                  <p className="text-zinc-300 text-xl md:text-2xl font-light leading-relaxed max-w-5xl opacity-90">{selectedMedia.description}</p>
-                </section>
+          <View style={styles.detailsActionsRow}>
+            <TouchableOpacity onPress={() => setIsPlayerOpen(true)} style={styles.detailsPlayBtn}>
+              <Play size={20} color="black" fill="black" />
+              <Text style={styles.detailsPlayBtnText}>WATCH NOW</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.detailsIconBtn}>
+              <Download size={22} color="white" />
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.detailsIconBtn}>
+              <Share2 size={22} color="white" />
+            </TouchableOpacity>
+          </View>
 
-                <section className="space-y-6">
-                   <h4 className="text-[10px] font-black uppercase tracking-[0.5em] text-white/20 border-b border-white/5 pb-3">Genre Classification</h4>
-                   <div className="flex flex-wrap gap-3">
-                     {(selectedMedia.genres || [selectedMedia.category]).map((genre, idx) => (
-                       <span key={idx} className="genre-chip px-7 py-3 bg-white/5 border border-white/10 text-[11px] font-black uppercase tracking-widest text-white/70 hover:border-lime-400/50 hover:text-white transition-all">{genre}</span>
-                     ))}
-                   </div>
-                </section>
-              </div>
+          {selectedMedia.progress !== undefined && (
+            <View style={styles.detailsProgressWrapper}>
+              <View style={styles.detailsProgressHeader}>
+                <Text style={styles.detailsProgressLabel}>CONTINUE WATCHING</Text>
+                <Text style={styles.detailsProgressPercent}>{selectedMedia.progress}%</Text>
+              </View>
+              <View style={styles.detailsProgressBar}>
+                <View style={[styles.detailsProgressBarFill, { width: `${selectedMedia.progress}%` }]} />
+              </View>
+            </View>
+          )}
 
-              <div className="space-y-12">
-                <section className="space-y-8">
-                  <h4 className="text-[10px] font-black uppercase tracking-[0.5em] text-white/20 border-b border-white/5 pb-3">Neural Cast</h4>
-                  <div className="grid grid-cols-1 gap-6 max-h-[400px] overflow-y-auto pr-4 no-scrollbar">
-                    {(selectedMedia.cast || []).map((member, idx) => (
-                      <div key={idx} className="flex items-center gap-5 group">
-                        <div className="w-14 h-14 rounded-full overflow-hidden bg-zinc-900 border border-white/10 flex-shrink-0">
-                          <img src={member.image || `https://ui-avatars.com/api/?name=${member.name}&background=random&color=fff`} className="w-full h-full object-cover transition-transform group-hover:scale-110" alt={member.name} />
-                        </div>
-                        <div>
-                          <div className="text-base font-black group-hover:text-lime-400 transition-colors leading-tight">{member.name}</div>
-                          <div className="text-[10px] font-bold text-white/30 uppercase tracking-widest mt-1">{member.role}</div>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </section>
+          <View style={styles.detailsDivider} />
 
-                <section className="space-y-6">
-                   <h4 className="text-[10px] font-black uppercase tracking-[0.5em] text-white/20 border-b border-white/5 pb-3">Stream Protocol</h4>
-                   <div className="vibrant-glass p-6 fluid-geom-md space-y-4">
-                     <div className="flex justify-between items-center text-[10px]">
-                       <span className="text-white/40 uppercase font-black tracking-widest">Format</span>
-                       <span className="text-white/80 font-bold uppercase">{selectedMedia.format.split(' • ')[0]}</span>
-                     </div>
-                     <div className="flex justify-between items-center text-[10px]">
-                       <span className="text-white/40 uppercase font-black tracking-widest">Encoding</span>
-                       <span className="text-white/80 font-bold uppercase">{selectedMedia.format.includes('4K') ? 'HEVC (H.265)' : 'AVC (H.264)'}</span>
-                     </div>
-                     <div className="flex justify-between items-center text-[10px]">
-                       <span className="text-white/40 uppercase font-black tracking-widest">DR Layer</span>
-                       <span className="text-lime-400 font-bold uppercase">{selectedMedia.format.includes('HDR') || selectedMedia.format.includes('VISION') ? 'High Dynamic Range' : 'Standard'}</span>
-                     </div>
-                   </div>
-                </section>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
+          <View style={styles.detailsSection}>
+            <Text style={styles.detailsSectionTitle}>SYNOPSIS</Text>
+            <Text style={styles.detailsDescription}>{selectedMedia.description}</Text>
+          </View>
+
+          <View style={styles.detailsSection}>
+            <Text style={styles.detailsSectionTitle}>CAST & CREW</Text>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.castScroll}>
+              {(selectedMedia.cast || []).map((member, idx) => (
+                <View key={idx} style={styles.castMember}>
+                  <Image 
+                    source={{ uri: member.image || `https://ui-avatars.com/api/?name=${member.name}&background=random&color=fff` }} 
+                    style={styles.castImage} 
+                  />
+                  <Text style={styles.castName}>{member.name}</Text>
+                  <Text style={styles.castRole}>{member.role}</Text>
+                </View>
+              ))}
+            </ScrollView>
+          </View>
+
+          <View style={styles.detailsSection}>
+            <Text style={styles.detailsSectionTitle}>FILE SPECIFICATIONS</Text>
+            <View style={styles.fileInfoCard}>
+              <View style={styles.fileInfoRow}>
+                <Text style={styles.fileInfoKey}>CONTAINER</Text>
+                <Text style={styles.fileInfoValue}>{selectedMedia.format.split(' • ')[0]}</Text>
+              </View>
+              <View style={styles.fileInfoRow}>
+                <Text style={styles.fileInfoKey}>RESOLUTION</Text>
+                <Text style={styles.fileInfoValue}>4K ULTRA HD</Text>
+              </View>
+              <View style={styles.fileInfoRow}>
+                <Text style={styles.fileInfoKey}>ENCODING</Text>
+                <Text style={styles.fileInfoValue}>HEVC / H.265</Text>
+              </View>
+            </View>
+          </View>
+        </View>
+      </ScrollView>
     );
   };
 
-  const renderCloud = () => (
-    <div className="p-12 space-y-8 animate-apple-open">
-      <h2 className="text-4xl font-black tracking-tighter text-vibrant">Cloud Storage</h2>
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-        <div className="vibrant-glass p-8 fluid-geom-md border-white/10 flex flex-col items-center gap-6 text-center">
-           <div className="w-16 h-16 rounded-full bg-blue-500/20 flex items-center justify-center text-blue-400"><Monitor size={32} /></div>
-           <div>
-             <h4 className="text-xl font-black">Google Drive</h4>
-             <p className="text-white/40 text-xs mt-2 uppercase tracking-widest">Connected</p>
-           </div>
-           <button className="ios-reflective px-8 py-3 fluid-geom-sm text-[10px] font-black uppercase tracking-widest border-white/10 hover:bg-white hover:text-black transition-all">Browse Files</button>
-        </div>
-        {/* Placeholder for other providers */}
-      </div>
-    </div>
-  );
-
-  const renderSearch = () => (
-    <div className="fixed inset-0 z-[100] bg-black/95 backdrop-blur-3xl animate-apple-open p-12 overflow-y-auto no-scrollbar">
-      <div className="max-w-4xl mx-auto space-y-12">
-        <div className="flex items-center gap-6 border-b border-white/20 pb-8">
-           <SearchIcon size={48} className="text-white/20" />
-           <input 
-             autoFocus
-             placeholder="Search Neural Library..." 
-             className="bg-transparent text-5xl font-black tracking-tighter outline-none flex-1 placeholder:text-white/10"
-           />
-           <button onClick={() => setIsSearchOpen(false)} className="ios-reflective p-4 fluid-geom-md border-white/10"><X size={32} /></button>
-        </div>
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-8">
-          {library.slice(0, 4).map(item => <MediaCard key={item.id} item={item} onClick={() => handleMediaClick(item)} />)}
-        </div>
-      </div>
-    </div>
-  );
-
-  // Auth/Loading logic
-  if (!isAuthenticated) return <AuthScreen onAuth={handleAuth} />;
-
   return (
-    <div className="min-h-screen bg-black text-white overflow-hidden relative">
-      <GlobalBackgroundVideo />
-      {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
-      <main className="h-screen overflow-y-auto no-scrollbar relative z-10">
-        {isSearchOpen && renderSearch()}
-        {view === 'home' && renderHome()}
-        {view === 'details' && renderDetails()}
-        {view === 'cloud' && renderCloud()}
-        {view === 'downloads' && <div className="p-12"><h2 className="text-4xl font-black tracking-tighter text-vibrant">Sync Center</h2><p className="text-white/40 mt-4 uppercase tracking-widest text-[10px]">No active downloads</p></div>}
-      </main>
+    <SafeAreaView style={styles.container}>
+      <StatusBar barStyle="light-content" />
+      {view === 'home' && renderHome()}
+      {view === 'details' && renderDetails()}
+      
+      {/* Bottom Navigation */}
+      <View style={styles.navContainer}>
+        <TouchableOpacity onPress={() => setView('home')} style={styles.navItem}>
+          <HomeIcon size={24} color={view === 'home' ? 'white' : '#555'} />
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.navItem}>
+          <SearchIcon size={24} color="#555" />
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.navItem}>
+          <Download size={24} color="#555" />
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.navItem}>
+          <Cloud size={24} color="#555" />
+        </TouchableOpacity>
+      </View>
+
       {isPlayerOpen && (
-        <div style={{ position: 'fixed', inset: 0, zIndex: 1000 }}>
+        <View style={styles.playerWrapper}>
           <AppleStylePlayer 
             source="https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4" 
             title={selectedMedia?.title}
             onClose={() => setIsPlayerOpen(false)}
           />
-        </div>
+        </View>
       )}
-      <BottomNav active={view === 'details' ? 'home' : view} onNavigate={setView} />
-    </div>
+
+      {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
+    </SafeAreaView>
   );
 }
 
-// --- Specialized UI Fragments (Memoized) ---
-const HeroSection = React.memo(({ item, onInfo, onPlay }: { item: MediaItem; onInfo: () => void; onPlay: () => void }) => (
-  <div className="relative w-full h-[80vh] md:h-[90vh] overflow-hidden">
-    <img src={item.backdrop} className="w-full h-full object-cover scale-110 opacity-70" alt={item.title} />
-    <div className="absolute inset-0 hbo-gradient" />
-    <div className="absolute bottom-36 left-0 right-0 px-12 flex flex-col items-start max-w-2xl">
-      <div className="flex items-center gap-3 mb-6 animate-pop">
-        <PlayCircle size={18} className="text-lime-500" />
-        <span className="text-white text-[11px] font-black tracking-[0.45em] uppercase opacity-90">Curated Masterpiece</span>
-      </div>
-      <h1 className="responsive-title font-[900] mb-10 tracking-tighter text-vibrant animate-pop">{item.title}</h1>
-      <p className="text-zinc-200 text-sm md:text-xl font-medium mb-12 line-clamp-2 animate-pop leading-relaxed opacity-90">{item.description}</p>
-      <div className="flex gap-5 w-full animate-pop">
-        <button onClick={onPlay} className="ios-reflective text-white h-20 px-12 flex-1 md:flex-initial fluid-geom-md font-black text-sm flex items-center justify-center gap-4 transition-all border-white/20 liquid-tap hover:bg-white hover:text-black">
-          <Play size={26} fill="currentColor" /> WATCH NOW
-        </button>
-        <button onClick={onInfo} className="ios-reflective text-white h-20 w-20 fluid-geom-md font-bold flex items-center justify-center transition-all liquid-tap border-white/20"><Info size={30} /></button>
-      </div>
-    </div>
-  </div>
-));
-
-const AuthScreen = React.memo(({ onAuth }: { onAuth: () => void }) => (
-  <div className="fixed inset-0 z-[1000] bg-black flex flex-col items-center justify-center p-12 text-center animate-apple-open overflow-hidden">
-    <GlobalBackgroundVideo isAuth />
-    <div className="mb-24 animate-pop relative z-10">
-      <div className="absolute -inset-20 bg-lime-400/10 blur-[120px] rounded-full opacity-50 pointer-events-none" />
-      <div className="text-8xl md:text-9xl font-black italic tracking-tighter mb-4 text-white text-vibrant drop-shadow-[0_0_60px_rgba(190,242,100,0.3)] uppercase">LUMINA</div>
-      <p className="text-zinc-300 font-bold uppercase tracking-[0.8em] text-[11px] opacity-80 pl-2">Neural Media Hub</p>
-    </div>
-    <div className="w-full max-w-sm space-y-6 relative z-10 p-8 fluid-geom-lg vibrant-glass border-white/5 shadow-2xl">
-      <button onClick={onAuth} className="w-full h-20 fluid-geom-md flex items-center gap-6 px-8 bg-blue-600 transition-all hover:scale-105 active:scale-95 liquid-tap shadow-2xl border border-white/10">
-        <span className="flex-1 text-center font-black tracking-tight text-sm text-white">CONTINUE WITH GOOGLE</span>
-      </button>
-      <button onClick={onAuth} className="w-full h-20 fluid-geom-md flex items-center gap-6 px-8 bg-sky-600 transition-all hover:scale-105 active:scale-95 liquid-tap shadow-2xl border border-white/10">
-        <span className="flex-1 text-center font-black tracking-tight text-sm text-white">MICROSOFT SIGN IN</span>
-      </button>
-    </div>
-  </div>
-));
-
-const MediaCard = React.memo(({ item, onClick, isHome }: { item: MediaItem; onClick: () => void; isHome?: boolean }) => (
-  <div onClick={onClick} className="relative flex-shrink-0 poster-width transition-all duration-500 cursor-pointer group animate-pop liquid-tap">
-    <div className="aspect-[2/3] fluid-geom-md overflow-hidden bg-zinc-900/50 poster-border backdrop-blur-md transition-all duration-700 group-hover:border-white/40 relative">
-      <img src={item.poster} alt={item.title} className="w-full h-full object-cover transition-all duration-1000 group-hover:scale-110 group-hover:opacity-60" loading="lazy" />
-      <div className="absolute top-4 right-4">
-        <span className="format-badge ios-reflective px-2.5 py-1.5 fluid-geom-sm text-[8px] font-black uppercase tracking-widest backdrop-blur-md border-white/10">{item.format.split(' • ')[0]}</span>
-      </div>
-    </div>
-    {item.progress !== undefined && item.progress > 0 && (
-      <div className={`mt-3 h-[4px] w-full rounded-full overflow-hidden relative ${isHome ? 'bg-white/10' : 'bg-white/5'}`}>
-        <div className="h-full shadow-[0_0_15px_rgba(163,230,53,0.7)] transition-all duration-500 relative" style={{ width: `${item.progress}%`, background: 'linear-gradient(90deg, #4d7c0f 0%, #bef264 100%)' }}>
-           <div className="absolute right-0 top-1/2 -translate-y-1/2 w-1.5 h-1.5 bg-white rounded-full shadow-[0_0_10px_white]" />
-        </div>
-      </div>
-    )}
-    <div className={`${item.progress ? 'mt-3' : 'mt-5'} px-2`}>
-      <h4 className="text-[17px] font-[900] truncate text-white tracking-[-0.06em] group-hover:text-lime-400 transition-all duration-300 leading-tight">{item.title}</h4>
-      <p className="text-[10px] text-zinc-300 font-black uppercase tracking-[0.25em] mt-1.5 opacity-60">{item.year} • {item.category}</p>
-    </div>
-  </div>
-));
+const styles = StyleSheet.create({
+  container: { flex: 1, backgroundColor: '#000' },
+  scrollView: { flex: 1 },
+  // Auth Screen
+  authContainer: { flex: 1, backgroundColor: 'black' },
+  authBg: { flex: 1, width: '100%', height: '100%' },
+  authOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'center', alignItems: 'center', padding: 40 },
+  authLogoContainer: { alignItems: 'center', marginBottom: 80 },
+  authLogo: { color: 'white', fontSize: 64, fontWeight: '900', letterSpacing: -3, fontStyle: 'italic' },
+  authLogoSub: { color: 'rgba(255,255,255,0.4)', fontSize: 10, fontWeight: 'bold', letterSpacing: 8, marginTop: 10 },
+  authButtonContainer: { width: '100%', gap: 15 },
+  authButton: { height: 60, borderRadius: 16, justifyContent: 'center', alignItems: 'center' },
+  authButtonText: { color: 'white', fontSize: 13, fontWeight: '900', letterSpacing: 1 },
+  // Hero
+  heroContainer: { height: SCREEN_HEIGHT * 0.75, width: '100%', position: 'relative' },
+  heroImage: { width: '100%', height: '100%' },
+  heroGradientOverlay: {
+    position: 'absolute', bottom: 0, left: 0, right: 0, height: '60%',
+    backgroundColor: 'rgba(0,0,0,1)', opacity: 0.8, // simplified gradient for RN
+  },
+  heroContent: { position: 'absolute', bottom: 120, left: 24, right: 24 },
+  heroBadgeRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 12 },
+  heroBadgeText: { color: 'white', fontSize: 10, fontWeight: '900', letterSpacing: 2 },
+  heroTitle: { color: 'white', fontSize: 48, fontWeight: '900', letterSpacing: -2, marginBottom: 16 },
+  heroDescription: { color: 'rgba(255,255,255,0.7)', fontSize: 14, lineHeight: 20, marginBottom: 24, maxWidth: '85%' },
+  heroButtonRow: { flexDirection: 'row', gap: 12 },
+  heroPlayButton: { 
+    flex: 1, height: 56, backgroundColor: 'white', borderRadius: 12, 
+    flexDirection: 'row', justifyContent: 'center', alignItems: 'center', gap: 10 
+  },
+  heroPlayButtonText: { color: 'black', fontSize: 13, fontWeight: '900' },
+  heroInfoButton: { 
+    width: 56, height: 56, backgroundColor: 'rgba(255,255,255,0.15)', 
+    borderRadius: 12, justifyContent: 'center', alignItems: 'center', borderWidth: 1, borderColor: 'rgba(255,255,255,0.1)'
+  },
+  // Sections
+  sectionsContainer: { marginTop: -60, paddingBottom: 100 },
+  section: { marginBottom: 32 },
+  sectionTitle: { color: 'white', fontSize: 20, fontWeight: '900', marginLeft: 24, marginBottom: 16, letterSpacing: -0.5 },
+  flatListContent: { paddingLeft: 24, paddingRight: 8 },
+  // Media Card
+  cardContainer: { width: 140, marginRight: 16 },
+  cardImageContainer: { height: 210, borderRadius: 12, overflow: 'hidden', backgroundColor: '#111', borderWidth: 1, borderColor: 'rgba(255,255,255,0.1)' },
+  cardImage: { width: '100%', height: '100%' },
+  cardFormatBadge: { position: 'absolute', top: 8, right: 8, paddingHorizontal: 6, paddingVertical: 4, borderRadius: 4, backgroundColor: 'rgba(0,0,0,0.6)', borderWidth: 0.5, borderColor: 'rgba(255,255,255,0.2)' },
+  cardFormatText: { color: 'white', fontSize: 8, fontWeight: '900' },
+  progressBarContainer: { height: 3, backgroundColor: 'rgba(255,255,255,0.1)', marginTop: 8, borderRadius: 2, overflow: 'hidden' },
+  progressBarFill: { height: '100%', backgroundColor: '#bef264' },
+  cardInfo: { marginTop: 10 },
+  cardTitle: { color: 'white', fontSize: 14, fontWeight: '700' },
+  cardSubtitle: { color: '#666', fontSize: 11, fontWeight: '500', marginTop: 4 },
+  // Details Screen
+  detailsContainer: { flex: 1, backgroundColor: 'black' },
+  detailsBackdrop: { width: '100%', height: SCREEN_HEIGHT * 0.55, opacity: 0.6 },
+  detailsGradientOverlay: { position: 'absolute', top: 0, left: 0, right: 0, height: SCREEN_HEIGHT * 0.6, backgroundColor: 'rgba(0,0,0,0.4)' },
+  detailsBackBtn: { position: 'absolute', top: 50, left: 24, width: 48, height: 48, backgroundColor: 'rgba(0,0,0,0.3)', borderRadius: 24, justifyContent: 'center', alignItems: 'center' },
+  detailsContentContainer: { marginTop: -150, paddingHorizontal: 24, paddingBottom: 120 },
+  detailsHeaderRow: { flexDirection: 'row', alignItems: 'flex-end', gap: 20 },
+  detailsPosterContainer: { width: 130, height: 195, borderRadius: 12, overflow: 'hidden', borderWidth: 2, borderColor: 'rgba(255,255,255,0.2)' },
+  detailsPoster: { width: '100%', height: '100%' },
+  detailsMainInfo: { flex: 1, paddingBottom: 8 },
+  detailsFormatRow: { flexDirection: 'row', gap: 8, marginBottom: 12 },
+  detailsFormatBadge: { paddingHorizontal: 8, paddingVertical: 4, backgroundColor: 'rgba(255,255,255,0.1)', borderRadius: 4, color: 'white', fontSize: 9, fontWeight: '900' },
+  detailsCategoryBadge: { paddingHorizontal: 8, paddingVertical: 4, backgroundColor: 'rgba(190,242,100,0.1)', borderRadius: 4, color: '#bef264', fontSize: 9, fontWeight: '900' },
+  detailsTitle: { color: 'white', fontSize: 32, fontWeight: '900', letterSpacing: -1, marginBottom: 8 },
+  detailsMetaText: { color: 'rgba(255,255,255,0.5)', fontSize: 11, fontWeight: '700', letterSpacing: 0.5 },
+  detailsActionsRow: { flexDirection: 'row', gap: 12, marginTop: 32 },
+  detailsPlayBtn: { flex: 1, height: 56, backgroundColor: 'white', borderRadius: 12, flexDirection: 'row', justifyContent: 'center', alignItems: 'center', gap: 10 },
+  detailsPlayBtnText: { color: 'black', fontSize: 12, fontWeight: '900', letterSpacing: 1 },
+  detailsIconBtn: { width: 56, height: 56, backgroundColor: 'rgba(255,255,255,0.08)', borderRadius: 12, justifyContent: 'center', alignItems: 'center', borderWidth: 1, borderColor: 'rgba(255,255,255,0.1)' },
+  detailsProgressWrapper: { marginTop: 32 },
+  detailsProgressHeader: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 8 },
+  detailsProgressLabel: { color: 'rgba(255,255,255,0.3)', fontSize: 9, fontWeight: '900', letterSpacing: 1 },
+  detailsProgressPercent: { color: 'white', fontSize: 9, fontWeight: '900' },
+  detailsProgressBar: { height: 4, backgroundColor: 'rgba(255,255,255,0.05)', borderRadius: 2, overflow: 'hidden' },
+  detailsProgressBarFill: { height: '100%', backgroundColor: '#bef264' },
+  detailsDivider: { height: 1, backgroundColor: 'rgba(255,255,255,0.05)', marginVertical: 40 },
+  detailsSection: { marginBottom: 40 },
+  detailsSectionTitle: { color: 'rgba(255,255,255,0.2)', fontSize: 10, fontWeight: '900', letterSpacing: 3, marginBottom: 16 },
+  detailsDescription: { color: 'rgba(255,255,255,0.7)', fontSize: 16, lineHeight: 24, fontWeight: '400' },
+  castScroll: { marginTop: 8 },
+  castMember: { width: 100, marginRight: 20, alignItems: 'center' },
+  castImage: { width: 80, height: 80, borderRadius: 40, marginBottom: 10, borderWidth: 1, borderColor: 'rgba(255,255,255,0.1)' },
+  castName: { color: 'white', fontSize: 13, fontWeight: '700', textAlign: 'center' },
+  castRole: { color: '#666', fontSize: 10, fontWeight: '500', textAlign: 'center', marginTop: 2 },
+  fileInfoCard: { padding: 20, backgroundColor: 'rgba(255,255,255,0.03)', borderRadius: 16, borderWidth: 1, borderColor: 'rgba(255,255,255,0.05)' },
+  fileInfoRow: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 8 },
+  fileInfoKey: { color: 'rgba(255,255,255,0.3)', fontSize: 10, fontWeight: '900', letterSpacing: 1 },
+  fileInfoValue: { color: 'white', fontSize: 11, fontWeight: '800' },
+  // Nav
+  navContainer: { 
+    position: 'absolute', bottom: 30, left: 24, right: 24, height: 64, 
+    backgroundColor: 'rgba(20,20,20,0.85)', borderRadius: 32, 
+    flexDirection: 'row', justifyContent: 'space-around', alignItems: 'center',
+    borderWidth: 1, borderColor: 'rgba(255,255,255,0.05)', overflow: 'hidden'
+  },
+  navItem: { padding: 12 },
+  // Player
+  playerWrapper: { position: 'absolute', inset: 0, zIndex: 1000, backgroundColor: 'black' },
+  // Toast
+  toastContainer: { 
+    position: 'absolute', top: 60, left: 24, right: 24, height: 50, 
+    borderRadius: 25, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    paddingHorizontal: 20, zIndex: 2000 
+  },
+  toastError: { backgroundColor: 'rgba(239, 68, 68, 0.9)' },
+  toastSuccess: { backgroundColor: 'rgba(163, 230, 53, 0.9)' },
+  toastInfo: { backgroundColor: 'rgba(59, 130, 246, 0.9)' },
+  toastText: { color: 'white', fontSize: 10, fontWeight: '900', letterSpacing: 1 },
+  toastClose: { padding: 4 }
+});
